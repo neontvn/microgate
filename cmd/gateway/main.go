@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/tanmay/gateway/internal/config"
 	"github.com/tanmay/gateway/internal/health"
 	"github.com/tanmay/gateway/internal/middleware"
@@ -37,10 +38,11 @@ func main() {
 	auth := middleware.NewAuth(cfg.Auth.APIKeys, cfg.Auth.JWTSecret)
 	circuitBreaker := middleware.NewCircuitBreaker(cfg.CircuitBreaker.Threshold, time.Duration(cfg.CircuitBreaker.Timeout)*time.Second)
 
-	// Chain middleware: RequestID → Logging → RateLimit → Auth → CircuitBreaker → Proxy
+	// Chain middleware: RequestID → Metrics → Logging → RateLimit → Auth → CircuitBreaker → Proxy
 	handler := middleware.Chain(
 		proxyHandler,
 		middleware.RequestID(),
+		middleware.Metrics(),
 		middleware.Logging(),
 		rateLimiter.Middleware(),
 		auth.Middleware(),
@@ -50,6 +52,7 @@ func main() {
 	// Register routes
 	mux := http.NewServeMux()
 	mux.Handle("/health", healthChecker.Handler()) // outside middleware chain — no auth/rate limit
+	mux.Handle("/metrics", promhttp.Handler())     // Prometheus metrics endpoint
 	mux.Handle("/", handler)                       // everything else goes through middleware
 
 	// Start the gateway server
