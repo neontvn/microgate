@@ -1,0 +1,29 @@
+server:
+  port: 8080
+
+routes:
+  - path: "/api/v1"
+    backends:
+      - "http://localhost:9001"
+      - "http://localhost:9002"
+      - "http://localhost:9003"
+    strategy: "round-robin"
+  - path: "/api/v2"
+    backend: "http://localhost:9004"
+
+ratelimit:
+  max_tokens: 10
+  refill_rate: 1.0
+
+auth:
+  api_keys:
+    - "key-abc123"
+    - "key-xyz789"
+  jwt_secret: "my-super-secret-key"
+
+circuitbreaker:
+  threshold: 5
+  timeout: 30
+
+healthcheck:
+  interval: 10
