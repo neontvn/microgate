@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import ServicePanel from './components/ServicePanel';
 import MetricsPanel from './components/MetricsPanel';
 import RequestTable from './components/RequestTable';
@@ -13,42 +13,53 @@ import {
 } from './data/mockData';
 
 export default function App() {
-    const [services, setServices] = useState(mockServices);
+    const [services, setServices] = useState([]);
     const [logs] = useState(mockLogs);
     const [selectedRequest, setSelectedRequest] = useState(null);
     const [showProcessLogs, setShowProcessLogs] = useState(false);
 
-    const handleStart = (id) => {
-        setServices((prev) =>
-            prev.map((s) =>
-                s.id === id
-                    ? { ...s, status: 'running', healthy: true, latency_ms: 50, error_rate: 0.001 }
-                    : s
-            )
-        );
+    // Fetch initial processes on mount
+    useEffect(() => {
+        fetch('/dashboard/api/processes')
+            .then(res => res.json())
+            .then(data => setServices(data.processes || []))
+            .catch(err => console.error("Failed to fetch processes:", err));
+    }, []);
+
+    const handleStart = async (id) => {
+        try {
+            await fetch(`/dashboard/api/processes/${id}/start`, { method: 'POST' });
+            // Optimistic update
+            setServices(prev => prev.map(s => s.id === id ? { ...s, status: 'running' } : s));
+        } catch (err) {
+            console.error("Failed to start:", err);
+        }
     };
 
-    const handleStop = (id) => {
-        setServices((prev) =>
-            prev.map((s) =>
-                s.id === id
-                    ? { ...s, status: 'stopped', healthy: false, latency_ms: null, error_rate: null }
-                    : s
-            )
-        );
+    const handleStop = async (id) => {
+        try {
+            await fetch(`/dashboard/api/processes/${id}/stop`, { method: 'POST' });
+            // Optimistic update
+            setServices(prev => prev.map(s => s.id === id ? { ...s, status: 'stopped' } : s));
+        } catch (err) {
+            console.error("Failed to stop:", err);
+        }
     };
 
-    const handleAddBackend = (data) => {
-        const newService = {
-            id: data.id,
-            port: data.port,
-            status: 'stopped',
-            healthy: false,
-            latency_ms: null,
-            last_check: null,
-            error_rate: null,
-        };
-        setServices((prev) => [...prev, newService]);
+    const handleAddBackend = async (data) => {
+        try {
+            await fetch('/dashboard/api/processes', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+            // Fetch fresh list
+            const res = await fetch('/dashboard/api/processes');
+            const json = await res.json();
+            setServices(json.processes || []);
+        } catch (err) {
+            console.error("Failed to add backend:", err);
+        }
     };
 
     return (

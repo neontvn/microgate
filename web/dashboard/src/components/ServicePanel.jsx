@@ -87,8 +87,8 @@ export default function ServicePanel({ services, onStart, onStop, onAdd }) {
 
 function AddBackendModal({ onClose, onAdd }) {
     const [port, setPort] = useState('');
-    const [command, setCommand] = useState('go');
-    const [args, setArgs] = useState('run cmd/testbackend/main.go -port');
+    const [command, setCommand] = useState('./tmp/testbackend');
+    const [args, setArgs] = useState('-port');
 
     const handleSubmit = (e) => {
         e.preventDefault();
@@ -121,7 +121,7 @@ function AddBackendModal({ onClose, onAdd }) {
                             type="text"
                             value={command}
                             onChange={(e) => setCommand(e.target.value)}
-                            placeholder="go"
+                            placeholder="./tmp/testbackend"
                         />
                     </div>
                     <div className="modal-field">
@@ -130,7 +130,7 @@ function AddBackendModal({ onClose, onAdd }) {
                             type="text"
                             value={args}
                             onChange={(e) => setArgs(e.target.value)}
-                            placeholder="run cmd/testbackend/main.go -port"
+                            placeholder="-port"
                         />
                     </div>
                     <div className="modal-actions">
