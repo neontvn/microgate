@@ -1,64 +1,42 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import useEventStream from './hooks/useEventStream';
+import { startProcess, stopProcess, addProcess } from './services/api';
 import ServicePanel from './components/ServicePanel';
 import MetricsPanel from './components/MetricsPanel';
 import RequestTable from './components/RequestTable';
 import RequestDetail from './components/RequestDetail';
 import ProcessLogs from './components/ProcessLogs';
-import {
-    mockServices,
-    mockMetrics,
-    mockSparklines,
-    mockLogs,
-    mockProcessLogs,
-} from './data/mockData';
+import { mockMetrics, mockSparklines, mockProcessLogs } from './data/mockData';
 
 export default function App() {
-    const [services, setServices] = useState([]);
-    const [logs] = useState(mockLogs);
+    const { services, logs, isConnected, error } = useEventStream();
     const [selectedRequest, setSelectedRequest] = useState(null);
     const [showProcessLogs, setShowProcessLogs] = useState(false);
 
-    // Fetch initial processes on mount
-    useEffect(() => {
-        fetch('/dashboard/api/processes')
-            .then(res => res.json())
-            .then(data => setServices(data.processes || []))
-            .catch(err => console.error("Failed to fetch processes:", err));
-    }, []);
-
     const handleStart = async (id) => {
         try {
-            await fetch(`/dashboard/api/processes/${id}/start`, { method: 'POST' });
-            // Optimistic update
-            setServices(prev => prev.map(s => s.id === id ? { ...s, status: 'running' } : s));
+            await startProcess(id);
         } catch (err) {
             console.error("Failed to start:", err);
+            alert(err.message);
         }
     };
 
     const handleStop = async (id) => {
         try {
-            await fetch(`/dashboard/api/processes/${id}/stop`, { method: 'POST' });
-            // Optimistic update
-            setServices(prev => prev.map(s => s.id === id ? { ...s, status: 'stopped' } : s));
+            await stopProcess(id);
         } catch (err) {
             console.error("Failed to stop:", err);
+            alert(err.message);
         }
     };
 
     const handleAddBackend = async (data) => {
         try {
-            await fetch('/dashboard/api/processes', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(data)
-            });
-            // Fetch fresh list
-            const res = await fetch('/dashboard/api/processes');
-            const json = await res.json();
-            setServices(json.processes || []);
+            await addProcess(data);
         } catch (err) {
             console.error("Failed to add backend:", err);
+            alert(err.message);
         }
     };
 
@@ -68,6 +46,10 @@ export default function App() {
                 <div className="app-header-left">
                     <span className="app-logo">⚡ MicroGate</span>
                     <span className="app-version">v0.4.0</span>
+                    <span className={`connection-status ${isConnected ? 'connected' : 'disconnected'}`}>
+                        {isConnected ? '🟢 Live' : '🔴 Reconnecting...'}
+                    </span>
+                    {error && <span className="error-text" style={{ color: 'red', marginLeft: '10px' }}>{error}</span>}
                 </div>
                 <div className="app-header-right">
                     <span className="uptime-badge">Uptime: {mockMetrics.uptime}</span>
@@ -88,12 +70,15 @@ export default function App() {
                     onAdd={handleAddBackend}
                 />
 
-                <MetricsPanel metrics={mockMetrics} sparklines={mockSparklines} />
+                <MetricsPanel
+                    metrics={mockMetrics}
+                    sparklines={mockSparklines}
+                />
 
                 {showProcessLogs && (
                     <ProcessLogs
                         logs={mockProcessLogs}
-                        title="Backend :9001 Output"
+                        title="Backend Logs"
                         onClear={() => { }}
                     />
                 )}

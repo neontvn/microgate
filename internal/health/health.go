@@ -18,10 +18,11 @@ type BackendStatus struct {
 // It runs background checks on a timer and caches the results so that
 // the /health endpoint doesn't need to probe backends on every request.
 type HealthChecker struct {
-	backends  map[string]*BackendStatus
-	mu        sync.RWMutex
-	startTime time.Time
-	client    *http.Client
+	backends      map[string]*BackendStatus
+	mu            sync.RWMutex
+	startTime     time.Time
+	client        *http.Client
+	OnStateChange func(url string, isHealthy bool) // hook for SSE updates
 }
 
 // NewHealthChecker creates a HealthChecker for the given backend URLs.
@@ -60,9 +61,15 @@ func (hc *HealthChecker) RunChecks() {
 		healthy := hc.checkBackend(url)
 
 		hc.mu.Lock()
+		wasHealthy := hc.backends[url].Healthy
 		hc.backends[url].Healthy = healthy
 		hc.backends[url].LastCheck = time.Now()
 		hc.mu.Unlock()
+
+		// Fire event outside the lock, but only if state changed
+		if hc.OnStateChange != nil && wasHealthy != healthy {
+			hc.OnStateChange(url, healthy)
+		}
 	}
 }
 

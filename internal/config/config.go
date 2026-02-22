@@ -57,6 +57,22 @@ type HealthCheckConfig struct {
 	Interval int `yaml:"interval"` // seconds between checks
 }
 
+// DashboardConfig holds dashboard settings
+type DashboardConfig struct {
+	Enabled     bool `yaml:"enabled"`
+	LogCapacity int  `yaml:"log_capacity"`
+	SSEBuffer   int  `yaml:"sse_buffer"`
+}
+
+// ProcessConfig holds managed process settings
+type ProcessConfig struct {
+	ID        string   `yaml:"id"`
+	Command   string   `yaml:"command"`
+	Args      []string `yaml:"args"`
+	Port      int      `yaml:"port"`
+	AutoStart bool     `yaml:"auto_start"`
+}
+
 // Config is the top-level configuration for the gateway.
 type Config struct {
 	Server         ServerConfig         `yaml:"server"`
@@ -65,6 +81,8 @@ type Config struct {
 	Auth           AuthConfig           `yaml:"auth"`
 	CircuitBreaker CircuitBreakerConfig `yaml:"circuitbreaker"`
 	HealthCheck    HealthCheckConfig    `yaml:"healthcheck"`
+	Dashboard      DashboardConfig      `yaml:"dashboard,omitempty"`
+	Processes      []ProcessConfig      `yaml:"processes,omitempty"`
 }
 
 // LoadConfig reads a YAML config file and parses it into a Config struct.

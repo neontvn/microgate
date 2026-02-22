@@ -5,10 +5,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -45,10 +43,21 @@ func main() {
 	auth := middleware.NewAuth(cfg.Auth.APIKeys, cfg.Auth.JWTSecret)
 	circuitBreaker := middleware.NewCircuitBreaker(cfg.CircuitBreaker.Threshold, time.Duration(cfg.CircuitBreaker.Timeout)*time.Second)
 
-	// Chain middleware: RequestID → Metrics → Logging → RateLimit → Auth → CircuitBreaker → Proxy
+	// Initialize dashboard process manager, log store, and SSE broker early so middleware can use it
+	pm := dashboard.NewProcessManager()
+	logStore := dashboard.NewLogStore(1000)
+	broker := dashboard.NewBroker()
+
+	// Hook ProcessManager events to the SSE broker
+	pm.OnStateChange = func(p dashboard.ManagedProcess) {
+		broker.Broadcast("process", p)
+	}
+
+	// Chain middleware: RequestID → Metrics → Capture → Logging → RateLimit → Auth → CircuitBreaker → Proxy
 	handler := middleware.Chain(
 		proxyHandler,
 		middleware.RequestID(),
+		middleware.Capture(logStore),
 		middleware.Metrics(),
 		middleware.Logging(),
 		rateLimiter.Middleware(),
@@ -56,32 +65,43 @@ func main() {
 		circuitBreaker.Middleware(),
 	)
 
-	// Initialize dashboard process manager
-	pm := dashboard.NewProcessManager()
-
-	// Dynamically populate processes from config
-	// All servers are added in stopped state by default
-	for _, rawURL := range backendURLs {
-		if parsedURL, err := url.Parse(rawURL); err == nil {
-			portStr := parsedURL.Port()
-			if portStr != "" {
-				if port, err := strconv.Atoi(portStr); err == nil {
-					id := fmt.Sprintf("backend-%d", port)
-					pm.Add(id, "./tmp/testbackend", []string{"-port", portStr}, port)
-				}
+	// Populate managed processes from config
+	for _, procCfg := range cfg.Processes {
+		if err := pm.Add(procCfg.ID, procCfg.Command, procCfg.Args, procCfg.Port); err != nil {
+			log.Printf("Error adding process %s: %v", procCfg.ID, err)
+			continue
+		}
+		if procCfg.AutoStart {
+			if err := pm.Start(procCfg.ID); err != nil {
+				log.Printf("Failed to auto-start process %s: %v", procCfg.ID, err)
+			} else {
+				log.Printf("Auto-started process %s on port %d", procCfg.ID, procCfg.Port)
 			}
 		}
 	}
 
-	dashboardAPI := dashboard.NewAPI(pm, healthChecker)
+	// Hook HealthChecker events to the SSE broker
+	healthChecker.OnStateChange = func(url string, isHealthy bool) {
+		broker.Broadcast("service", map[string]interface{}{
+			"url":     url,
+			"healthy": isHealthy,
+		})
+	}
+
+	dashboardAPI := dashboard.NewAPI(pm, healthChecker, logStore, broker)
 
 	// Register routes
 	mux := http.NewServeMux()
 	mux.Handle("/health", healthChecker.Handler()) // outside middleware chain — no auth/rate limit
 	mux.Handle("/metrics", promhttp.Handler())     // Prometheus metrics endpoint
 
-	// Dashboard API (strip prefix to match dashboard internal routes)
-	mux.Handle("/dashboard/api/", http.StripPrefix("/dashboard/api", dashboardAPI.Handler()))
+	// Dashboard
+	if cfg.Dashboard.Enabled {
+		log.Println("Dashboard enabled - UI hosted at /dashboard/")
+		mux.Handle("/dashboard/api/", http.StripPrefix("/dashboard/api", dashboardAPI.Handler()))
+		// Serve React frontend (ensure trailing slash matches React router/assets if applicable)
+		mux.Handle("/dashboard/", http.StripPrefix("/dashboard/", http.FileServer(http.Dir("web/dashboard/dist"))))
+	}
 
 	mux.Handle("/", handler) // everything else goes through middleware
 

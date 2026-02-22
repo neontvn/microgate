@@ -27,3 +27,30 @@ circuitbreaker:
 
 healthcheck:
   interval: 10
+
+dashboard:
+  enabled: true
+  log_capacity: 1000
+  sse_buffer: 256
+
+processes:
+  - id: "backend-9001"
+    command: "./tmp/testbackend"
+    args: ["-port", "9001"]
+    port: 9001
+    auto_start: true
+  - id: "backend-9002"
+    command: "./tmp/testbackend"
+    args: ["-port", "9002"]
+    port: 9002
+    auto_start: true
+  - id: "backend-9003"
+    command: "./tmp/testbackend"
+    args: ["-port", "9003"]
+    port: 9003
+    auto_start: false
+  - id: "backend-9004"
+    command: "./tmp/testbackend"
+    args: ["-port", "9004"]
+    port: 9004
+    auto_start: false

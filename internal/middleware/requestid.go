@@ -53,3 +53,9 @@ func GetRequestID(ctx context.Context) string {
 	}
 	return ""
 }
+
+// ContextWithRequestID creates a new context with the given request ID.
+// Useful for tests or background jobs originating from a request.
+func ContextWithRequestID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, requestIDKey{}, id)
+}

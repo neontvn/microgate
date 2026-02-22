@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/tanmay/gateway/internal/health"
@@ -11,15 +12,25 @@ import (
 
 // API provides HTTP endpoints for the dashboard
 type API struct {
-	pm *ProcessManager
-	hc *health.HealthChecker
+	pm     *ProcessManager
+	hc     *health.HealthChecker
+	store  *LogStore
+	broker *Broker
 }
 
 // NewAPI creates a new dashboard API
-func NewAPI(pm *ProcessManager, hc *health.HealthChecker) *API {
+func NewAPI(pm *ProcessManager, hc *health.HealthChecker, store *LogStore, broker *Broker) *API {
+
+	// Hook the log store to emit 'request' events
+	store.OnAdd = func(log RequestLog) {
+		broker.Broadcast("request", log)
+	}
+
 	return &API{
-		pm: pm,
-		hc: hc,
+		pm:     pm,
+		hc:     hc,
+		store:  store,
+		broker: broker,
 	}
 }
 
@@ -45,6 +56,11 @@ func (api *API) Handler() http.Handler {
 
 	mux.HandleFunc("/processes", corsHandler(api.handleProcesses))
 	mux.HandleFunc("/processes/", corsHandler(api.handleProcessAction))
+	mux.HandleFunc("/logs", corsHandler(api.handleLogs))
+	mux.HandleFunc("/logs/", corsHandler(api.handleLogDetail))
+
+	// Server-Sent Events stream
+	mux.HandleFunc("/stream", api.broker.StreamHandler())
 
 	return mux
 }
@@ -142,4 +158,66 @@ func (api *API) handleProcessAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+// handleLogs handles GET /logs to list recent request logs with optional filters
+func (api *API) handleLogs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	q := r.URL.Query()
+
+	limit := 50
+	if l := q.Get("limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+
+	status := 0
+	if s := q.Get("status"); s != "" {
+		if parsed, err := strconv.Atoi(s); err == nil {
+			status = parsed
+		}
+	}
+
+	path := q.Get("path")
+
+	// If no specific filters, use Recent() for faster retrieval
+	var logs []RequestLog
+	if status == 0 && path == "" {
+		logs = api.store.Recent(limit)
+	} else {
+		logs = api.store.Search(limit, status, path)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"logs": logs,
+	})
+}
+
+// handleLogDetail handles GET /logs/{id} to get a single log
+func (api *API) handleLogDetail(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	id := strings.TrimPrefix(r.URL.Path, "/logs/")
+	if id == "" {
+		http.Error(w, "Log ID required", http.StatusBadRequest)
+		return
+	}
+
+	log, found := api.store.GetByID(id)
+	if !found {
+		http.Error(w, "Log not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(log)
 }

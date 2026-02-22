@@ -34,8 +34,9 @@ type ManagedProcess struct {
 
 // ProcessManager controls the lifecycle of backend processes
 type ProcessManager struct {
-	processes map[string]*ManagedProcess
-	mu        sync.RWMutex
+	processes     map[string]*ManagedProcess
+	mu            sync.RWMutex
+	OnStateChange func(p ManagedProcess) // hook for SSE updates
 }
 
 // NewProcessManager creates a new process manager
@@ -102,6 +103,11 @@ func (m *ProcessManager) Start(id string) error {
 	p.Status = StatusRunning
 	p.StartedAt = &now
 
+	// Fire event
+	if m.OnStateChange != nil {
+		m.OnStateChange(*p)
+	}
+
 	// Monitor process in background
 	go func(proc *ManagedProcess, c *exec.Cmd) {
 		err := c.Wait()
@@ -123,6 +129,11 @@ func (m *ProcessManager) Start(id string) error {
 			} else {
 				fmt.Printf("[ProcessManager] process %s stopped normally\n", proc.ID)
 				proc.Status = StatusStopped
+			}
+
+			// Fire event for the transition to stopped/crashed
+			if m.OnStateChange != nil {
+				m.OnStateChange(*proc)
 			}
 		}
 	}(p, cmd)
