@@ -153,6 +153,116 @@ func (s *LogStore) Search(limit int, status int, path string) []RequestLog {
 	return result
 }
 
+// SparklineData holds 30 time-bucketed data points for charting
+type SparklineData struct {
+	Requests []float64 `json:"requests"`
+	Latency  []float64 `json:"latency"`
+	Errors   []float64 `json:"errors"`
+}
+
+// MetricsSnapshot holds computed gateway metrics
+type MetricsSnapshot struct {
+	RequestsPerMinute int           `json:"requests_per_minute"`
+	AvgLatencyMs      int           `json:"avg_latency_ms"`
+	ErrorRate         float64       `json:"error_rate"`
+	Sparklines        SparklineData `json:"sparklines"`
+}
+
+// Metrics computes real-time metrics from the log store.
+// RPM, avg latency, and error rate are computed from the last 60 seconds.
+// Sparklines are 30 one-minute buckets covering the last 30 minutes.
+func (s *LogStore) Metrics() MetricsSnapshot {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	now := time.Now()
+	oneMinuteAgo := now.Add(-60 * time.Second)
+	thirtyMinutesAgo := now.Add(-30 * time.Minute)
+
+	// Summary stats for last 60 seconds
+	var recentCount int
+	var recentErrors int
+	var recentLatencySum time.Duration
+
+	// Sparkline buckets: 30 one-minute windows
+	const bucketCount = 30
+	bucketRequests := make([]float64, bucketCount)
+	bucketLatencySum := make([]float64, bucketCount)
+	bucketLatencyCount := make([]int, bucketCount)
+	bucketErrors := make([]float64, bucketCount)
+
+	// Scan all entries in the ring buffer
+	startIdx := s.index - 1
+	if startIdx < 0 {
+		startIdx = s.size - 1
+	}
+
+	for i := 0; i < s.count; i++ {
+		idx := startIdx - i
+		if idx < 0 {
+			idx += s.size
+		}
+		log := s.logs[idx]
+
+		// Skip zero-value entries (unfilled ring buffer slots)
+		if log.Timestamp.IsZero() {
+			continue
+		}
+
+		// Summary metrics: last 60 seconds
+		if log.Timestamp.After(oneMinuteAgo) {
+			recentCount++
+			recentLatencySum += log.Latency
+			if log.Status >= 500 {
+				recentErrors++
+			}
+		}
+
+		// Sparklines: last 30 minutes
+		if log.Timestamp.After(thirtyMinutesAgo) {
+			elapsed := now.Sub(log.Timestamp)
+			bucket := int(elapsed.Minutes())
+			if bucket >= bucketCount {
+				bucket = bucketCount - 1
+			}
+			// Invert so index 0 = oldest, 29 = most recent
+			bucket = bucketCount - 1 - bucket
+
+			bucketRequests[bucket]++
+			bucketLatencySum[bucket] += float64(log.Latency.Milliseconds())
+			bucketLatencyCount[bucket]++
+			if log.Status >= 500 {
+				bucketErrors[bucket]++
+			}
+		}
+	}
+
+	// Compute summary
+	snap := MetricsSnapshot{
+		RequestsPerMinute: recentCount,
+	}
+	if recentCount > 0 {
+		snap.AvgLatencyMs = int(recentLatencySum.Milliseconds()) / recentCount
+		snap.ErrorRate = float64(recentErrors) / float64(recentCount)
+	}
+
+	// Compute sparkline averages for latency
+	sparkLatency := make([]float64, bucketCount)
+	for i := 0; i < bucketCount; i++ {
+		if bucketLatencyCount[i] > 0 {
+			sparkLatency[i] = bucketLatencySum[i] / float64(bucketLatencyCount[i])
+		}
+	}
+
+	snap.Sparklines = SparklineData{
+		Requests: bucketRequests,
+		Latency:  sparkLatency,
+		Errors:   bucketErrors,
+	}
+
+	return snap
+}
+
 func containsString(s, substr string) bool {
 	// Basic substring check for the path filter
 	return len(s) >= len(substr) && func() bool {

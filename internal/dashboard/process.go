@@ -1,8 +1,10 @@
 package dashboard
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"sync"
@@ -18,6 +20,54 @@ const (
 	StatusCrashed ProcessStatus = "crashed"
 )
 
+// lineBuffer is a thread-safe ring buffer that stores the last N output lines.
+type lineBuffer struct {
+	lines []string
+	mu    sync.RWMutex
+	size  int
+	index int
+	count int
+}
+
+func newLineBuffer(capacity int) *lineBuffer {
+	return &lineBuffer{
+		lines: make([]string, capacity),
+		size:  capacity,
+	}
+}
+
+func (b *lineBuffer) Add(line string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.lines[b.index] = line
+	b.index = (b.index + 1) % b.size
+	if b.count < b.size {
+		b.count++
+	}
+}
+
+// Recent returns the last n lines, oldest first.
+func (b *lineBuffer) Recent(n int) []string {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if n > b.count {
+		n = b.count
+	}
+	if n <= 0 {
+		return []string{}
+	}
+	result := make([]string, n)
+	startIdx := b.index - n
+	if startIdx < 0 {
+		startIdx += b.size
+	}
+	for i := 0; i < n; i++ {
+		idx := (startIdx + i) % b.size
+		result[i] = b.lines[idx]
+	}
+	return result
+}
+
 // ManagedProcess holds metadata and control structures for a backend process
 type ManagedProcess struct {
 	ID        string        `json:"id"`
@@ -30,6 +80,7 @@ type ManagedProcess struct {
 
 	cmd    *exec.Cmd
 	cancel context.CancelFunc
+	output *lineBuffer
 }
 
 // ProcessManager controls the lifecycle of backend processes
@@ -84,9 +135,22 @@ func (m *ProcessManager) Start(id string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, p.Command, p.Args...)
 
-	// Pipe output to gateway stdout for debugging crashes
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	// Initialize output buffer if needed
+	if p.output == nil {
+		p.output = newLineBuffer(200)
+	}
+
+	// Capture stdout and stderr, tee to os.Stdout/os.Stderr for debugging
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		cancel()
+		return fmt.Errorf("failed to create stdout pipe: %w", err)
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		cancel()
+		return fmt.Errorf("failed to create stderr pipe: %w", err)
+	}
 
 	// Start the process
 	if err := cmd.Start(); err != nil {
@@ -94,6 +158,18 @@ func (m *ProcessManager) Start(id string) error {
 		p.Status = StatusCrashed
 		return fmt.Errorf("failed to start process: %w", err)
 	}
+
+	// Scan stdout and stderr in background goroutines
+	scanPipe := func(pipe io.ReadCloser, dest *os.File) {
+		scanner := bufio.NewScanner(pipe)
+		for scanner.Scan() {
+			line := scanner.Text()
+			p.output.Add(line)
+			fmt.Fprintln(dest, line)
+		}
+	}
+	go scanPipe(stdoutPipe, os.Stdout)
+	go scanPipe(stderrPipe, os.Stderr)
 
 	// Update state
 	now := time.Now()
@@ -179,6 +255,21 @@ func (m *ProcessManager) List() []ManagedProcess {
 		list = append(list, *p)
 	}
 	return list
+}
+
+// Logs returns the recent output lines for a given process.
+func (m *ProcessManager) Logs(id string, lines int) ([]string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	p, exists := m.processes[id]
+	if !exists {
+		return nil, fmt.Errorf("process with ID %s not found", id)
+	}
+	if p.output == nil {
+		return []string{}, nil
+	}
+	return p.output.Recent(lines), nil
 }
 
 // StopAll gracefully shuts down all running processes

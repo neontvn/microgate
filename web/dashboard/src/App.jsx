@@ -1,17 +1,31 @@
 import { useState } from 'react';
 import useEventStream from './hooks/useEventStream';
-import { startProcess, stopProcess, addProcess } from './services/api';
+import { startProcess, stopProcess, addProcess, fetchProcessLogs } from './services/api';
 import ServicePanel from './components/ServicePanel';
 import MetricsPanel from './components/MetricsPanel';
 import RequestTable from './components/RequestTable';
 import RequestDetail from './components/RequestDetail';
 import ProcessLogs from './components/ProcessLogs';
-import { mockMetrics, mockSparklines, mockProcessLogs } from './data/mockData';
+
+const emptyMetrics = {
+    requests_per_minute: 0,
+    avg_latency_ms: 0,
+    error_rate: 0,
+    healthy_backends: 0,
+    total_backends: 0,
+    uptime: '0s',
+    sparklines: { requests: [], latency: [], errors: [] },
+};
 
 export default function App() {
-    const { services, logs, isConnected, error } = useEventStream();
+    const { services, logs, metrics, isConnected, error } = useEventStream();
     const [selectedRequest, setSelectedRequest] = useState(null);
     const [showProcessLogs, setShowProcessLogs] = useState(false);
+    const [processLogs, setProcessLogs] = useState([]);
+    const [processLogsId, setProcessLogsId] = useState(null);
+
+    const m = metrics || emptyMetrics;
+    const sparklines = m.sparklines || { requests: [], latency: [], errors: [] };
 
     const handleStart = async (id) => {
         try {
@@ -40,6 +54,33 @@ export default function App() {
         }
     };
 
+    const handleToggleProcessLogs = async () => {
+        if (showProcessLogs) {
+            setShowProcessLogs(false);
+            return;
+        }
+        // Show logs for the first running process, or the first process
+        const target = services.find(s => s.status === 'running') || services[0];
+        if (target) {
+            try {
+                const lines = await fetchProcessLogs(target.id);
+                setProcessLogs(lines);
+                setProcessLogsId(target.id);
+            } catch (err) {
+                console.error("Failed to fetch process logs:", err);
+                setProcessLogs([]);
+            }
+        } else {
+            setProcessLogs([]);
+            setProcessLogsId(null);
+        }
+        setShowProcessLogs(true);
+    };
+
+    const handleClearProcessLogs = () => {
+        setProcessLogs([]);
+    };
+
     return (
         <div className="app">
             <header className="app-header">
@@ -52,10 +93,10 @@ export default function App() {
                     {error && <span className="error-text" style={{ color: 'red', marginLeft: '10px' }}>{error}</span>}
                 </div>
                 <div className="app-header-right">
-                    <span className="uptime-badge">Uptime: {mockMetrics.uptime}</span>
+                    <span className="uptime-badge">Uptime: {m.uptime}</span>
                     <button
                         className="btn btn-sm"
-                        onClick={() => setShowProcessLogs(!showProcessLogs)}
+                        onClick={handleToggleProcessLogs}
                     >
                         {showProcessLogs ? 'Hide Logs' : 'Process Logs'}
                     </button>
@@ -71,15 +112,15 @@ export default function App() {
                 />
 
                 <MetricsPanel
-                    metrics={mockMetrics}
-                    sparklines={mockSparklines}
+                    metrics={m}
+                    sparklines={sparklines}
                 />
 
                 {showProcessLogs && (
                     <ProcessLogs
-                        logs={mockProcessLogs}
-                        title="Backend Logs"
-                        onClear={() => { }}
+                        logs={processLogs}
+                        title={processLogsId ? `Logs: ${processLogsId}` : 'Backend Logs'}
+                        onClear={handleClearProcessLogs}
                     />
                 )}
 

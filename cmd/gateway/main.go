@@ -89,6 +89,7 @@ func main() {
 	}
 
 	dashboardAPI := dashboard.NewAPI(pm, healthChecker, proxyHandler, logStore, broker)
+	dashboardAPI.StartMetricsBroadcast(5 * time.Second)
 
 	// Register routes
 	mux := http.NewServeMux()

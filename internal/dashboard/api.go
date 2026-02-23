@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/tanmay/gateway/internal/health"
 	"github.com/tanmay/gateway/internal/proxy"
@@ -60,6 +61,7 @@ func (api *API) Handler() http.Handler {
 	mux.HandleFunc("/processes", corsHandler(api.handleProcesses))
 	mux.HandleFunc("/processes/", corsHandler(api.handleProcessAction))
 	mux.HandleFunc("/routes", corsHandler(api.handleRoutes))
+	mux.HandleFunc("/metrics", corsHandler(api.handleMetrics))
 	mux.HandleFunc("/logs", corsHandler(api.handleLogs))
 	mux.HandleFunc("/logs/", corsHandler(api.handleLogDetail))
 
@@ -139,13 +141,9 @@ func (api *API) handleProcesses(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 }
 
-// handleProcessAction handles POST /processes/{id}/start and /processes/{id}/stop
+// handleProcessAction handles POST /processes/{id}/start, /processes/{id}/stop,
+// and GET /processes/{id}/logs
 func (api *API) handleProcessAction(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	// Simple path parsing: /processes/{id}/{action}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/processes/"), "/")
 	if len(parts) != 2 {
@@ -155,6 +153,32 @@ func (api *API) handleProcessAction(w http.ResponseWriter, r *http.Request) {
 
 	id := parts[0]
 	action := parts[1]
+
+	// GET /processes/{id}/logs
+	if action == "logs" && r.Method == http.MethodGet {
+		lines := 100
+		if l := r.URL.Query().Get("lines"); l != "" {
+			if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
+				lines = parsed
+			}
+		}
+		output, err := api.pm.Logs(id, lines)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"lines": output,
+		})
+		return
+	}
+
+	// POST actions: start, stop
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 
 	var err error
 	switch action {
@@ -225,6 +249,48 @@ func (api *API) handleRoutes(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"routes": api.proxy.RouteNames(),
 	})
+}
+
+// handleMetrics handles GET /metrics to return real-time gateway metrics
+func (api *API) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	snap := api.store.Metrics()
+	healthy, total := api.hc.BackendCounts()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"requests_per_minute": snap.RequestsPerMinute,
+		"avg_latency_ms":     snap.AvgLatencyMs,
+		"error_rate":         snap.ErrorRate,
+		"healthy_backends":   healthy,
+		"total_backends":     total,
+		"uptime":             api.hc.Uptime(),
+		"sparklines":         snap.Sparklines,
+	})
+}
+
+// StartMetricsBroadcast sends a metrics SSE event every interval.
+func (api *API) StartMetricsBroadcast(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	go func() {
+		for range ticker.C {
+			snap := api.store.Metrics()
+			healthy, total := api.hc.BackendCounts()
+			api.broker.Broadcast("metrics", map[string]interface{}{
+				"requests_per_minute": snap.RequestsPerMinute,
+				"avg_latency_ms":     snap.AvgLatencyMs,
+				"error_rate":         snap.ErrorRate,
+				"healthy_backends":   healthy,
+				"total_backends":     total,
+				"uptime":             api.hc.Uptime(),
+				"sparklines":         snap.Sparklines,
+			})
+		}
+	}()
 }
 
 // handleLogDetail handles GET /logs/{id} to get a single log

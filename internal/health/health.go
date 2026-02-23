@@ -112,6 +112,24 @@ func (hc *HealthChecker) IsHealthy(url string) bool {
 	return false
 }
 
+// Uptime returns the gateway uptime as a human-readable string.
+func (hc *HealthChecker) Uptime() string {
+	return time.Since(hc.startTime).Round(time.Second).String()
+}
+
+// BackendCounts returns the number of healthy and total backends.
+func (hc *HealthChecker) BackendCounts() (healthy, total int) {
+	hc.mu.RLock()
+	defer hc.mu.RUnlock()
+	total = len(hc.backends)
+	for _, s := range hc.backends {
+		if s.Healthy {
+			healthy++
+		}
+	}
+	return
+}
+
 // healthResponse is the JSON structure returned by the /health endpoint.
 type healthResponse struct {
 	Status   string                    `json:"status"`

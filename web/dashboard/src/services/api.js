@@ -83,6 +83,33 @@ export async function stopProcess(id) {
 }
 
 /**
+ * Fetches real-time gateway metrics and sparklines
+ * @returns {Promise<Object>} Metrics object with sparklines
+ */
+export async function fetchMetrics() {
+    const res = await fetch(`${API_BASE}/metrics`);
+    if (!res.ok) {
+        throw new Error(`Failed to fetch metrics: ${res.statusText}`);
+    }
+    return res.json();
+}
+
+/**
+ * Fetches recent output lines from a managed process
+ * @param {string} id - The process ID
+ * @param {number} lines - Number of lines to fetch (default 100)
+ * @returns {Promise<Array<string>>} Array of output lines
+ */
+export async function fetchProcessLogs(id, lines = 100) {
+    const res = await fetch(`${API_BASE}/processes/${id}/logs?lines=${lines}`);
+    if (!res.ok) {
+        throw new Error(`Failed to fetch process logs: ${res.statusText}`);
+    }
+    const data = await res.json();
+    return data.lines || [];
+}
+
+/**
  * Fetches available proxy route paths (e.g. /api/v1, /api/v2)
  * @returns {Promise<Array<string>>} Array of route path strings
  */

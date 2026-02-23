@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { fetchLogs, fetchProcesses } from '../services/api';
+import { fetchLogs, fetchProcesses, fetchMetrics } from '../services/api';
 
 /**
  * Custom hook to connect to the Server-Sent Events stream
@@ -10,6 +10,7 @@ import { fetchLogs, fetchProcesses } from '../services/api';
 export default function useEventStream(url = '/dashboard/api/stream') {
     const [logs, setLogs] = useState([]);
     const [services, setServices] = useState([]);
+    const [metrics, setMetrics] = useState(null);
     const [isConnected, setIsConnected] = useState(false);
     const [lastError, setLastError] = useState(null);
 
@@ -19,14 +20,16 @@ export default function useEventStream(url = '/dashboard/api/stream') {
 
         async function fetchInitialData() {
             try {
-                // Fetch recent logs
-                const initialLogs = await fetchLogs({ limit: 50 });
-                // Fetch current processes/health
-                const initialServices = await fetchProcesses();
+                const [initialLogs, initialServices, initialMetrics] = await Promise.all([
+                    fetchLogs({ limit: 50 }),
+                    fetchProcesses(),
+                    fetchMetrics(),
+                ]);
 
                 if (mounted) {
                     setLogs(initialLogs);
                     setServices(initialServices);
+                    setMetrics(initialMetrics);
                 }
             } catch (err) {
                 console.error("Failed to fetch initial data:", err);
@@ -112,6 +115,16 @@ export default function useEventStream(url = '/dashboard/api/stream') {
             }
         });
 
+        // Listen for periodic metrics snapshots
+        source.addEventListener('metrics', (e) => {
+            try {
+                const metricsEvent = JSON.parse(e.data);
+                setMetrics(metricsEvent);
+            } catch (err) {
+                console.error("Error parsing metrics event:", err);
+            }
+        });
+
         return () => {
             console.log("Closing SSE connection");
             source.close();
@@ -122,6 +135,7 @@ export default function useEventStream(url = '/dashboard/api/stream') {
     return {
         logs,
         services,
+        metrics,
         isConnected,
         error: lastError
     };
