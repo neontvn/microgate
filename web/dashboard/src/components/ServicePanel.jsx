@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { fetchRoutes } from '../services/api';
 
 export default function ServicePanel({ services, onStart, onStop, onAdd }) {
     const [showModal, setShowModal] = useState(false);
@@ -89,6 +90,15 @@ function AddBackendModal({ onClose, onAdd }) {
     const [port, setPort] = useState('');
     const [command, setCommand] = useState('./tmp/testbackend');
     const [args, setArgs] = useState('-port');
+    const [route, setRoute] = useState('');
+    const [routes, setRoutes] = useState([]);
+
+    useEffect(() => {
+        fetchRoutes().then((r) => {
+            setRoutes(r);
+            if (r.length > 0) setRoute(r[0]);
+        }).catch(() => {});
+    }, []);
 
     const handleSubmit = (e) => {
         e.preventDefault();
@@ -97,6 +107,7 @@ function AddBackendModal({ onClose, onAdd }) {
             port: parseInt(port, 10),
             command,
             args: `${args} ${port}`.split(' '),
+            route,
         });
     };
 
@@ -105,6 +116,14 @@ function AddBackendModal({ onClose, onAdd }) {
             <div className="modal" onClick={(e) => e.stopPropagation()}>
                 <h2>Add New Backend</h2>
                 <form onSubmit={handleSubmit}>
+                    <div className="modal-field">
+                        <label>Route</label>
+                        <select value={route} onChange={(e) => setRoute(e.target.value)} required>
+                            {routes.map((r) => (
+                                <option key={r} value={r}>{r}</option>
+                            ))}
+                        </select>
+                    </div>
                     <div className="modal-field">
                         <label>Port</label>
                         <input

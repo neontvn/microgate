@@ -83,12 +83,26 @@ export async function stopProcess(id) {
 }
 
 /**
+ * Fetches available proxy route paths (e.g. /api/v1, /api/v2)
+ * @returns {Promise<Array<string>>} Array of route path strings
+ */
+export async function fetchRoutes() {
+    const res = await fetch(`${API_BASE}/routes`);
+    if (!res.ok) {
+        throw new Error(`Failed to fetch routes: ${res.statusText}`);
+    }
+    const data = await res.json();
+    return data.routes || [];
+}
+
+/**
  * Adds a new process to be managed by the gateway
- * @param {Object} data 
+ * @param {Object} data
  * @param {string} data.id
  * @param {string} data.command
  * @param {Array<string>} data.args
  * @param {number} data.port
+ * @param {string} data.route - The route path to register this backend with
  */
 export async function addProcess(data) {
     const res = await fetch(`${API_BASE}/processes`, {

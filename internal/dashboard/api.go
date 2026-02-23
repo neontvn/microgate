@@ -8,18 +8,20 @@ import (
 	"strings"
 
 	"github.com/tanmay/gateway/internal/health"
+	"github.com/tanmay/gateway/internal/proxy"
 )
 
 // API provides HTTP endpoints for the dashboard
 type API struct {
-	pm     *ProcessManager
-	hc     *health.HealthChecker
-	store  *LogStore
+	pm    *ProcessManager
+	hc    *health.HealthChecker
+	proxy *proxy.Proxy
+	store *LogStore
 	broker *Broker
 }
 
 // NewAPI creates a new dashboard API
-func NewAPI(pm *ProcessManager, hc *health.HealthChecker, store *LogStore, broker *Broker) *API {
+func NewAPI(pm *ProcessManager, hc *health.HealthChecker, p *proxy.Proxy, store *LogStore, broker *Broker) *API {
 
 	// Hook the log store to emit 'request' events
 	store.OnAdd = func(log RequestLog) {
@@ -29,6 +31,7 @@ func NewAPI(pm *ProcessManager, hc *health.HealthChecker, store *LogStore, broke
 	return &API{
 		pm:     pm,
 		hc:     hc,
+		proxy:  p,
 		store:  store,
 		broker: broker,
 	}
@@ -56,6 +59,7 @@ func (api *API) Handler() http.Handler {
 
 	mux.HandleFunc("/processes", corsHandler(api.handleProcesses))
 	mux.HandleFunc("/processes/", corsHandler(api.handleProcessAction))
+	mux.HandleFunc("/routes", corsHandler(api.handleRoutes))
 	mux.HandleFunc("/logs", corsHandler(api.handleLogs))
 	mux.HandleFunc("/logs/", corsHandler(api.handleLogDetail))
 
@@ -105,6 +109,7 @@ func (api *API) handleProcesses(w http.ResponseWriter, r *http.Request) {
 			Command string   `json:"command"`
 			Args    []string `json:"args"`
 			Port    int      `json:"port"`
+			Route   string   `json:"route"`
 		}
 
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -116,6 +121,16 @@ func (api *API) handleProcesses(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
+
+		// Register the backend with the route's load balancer and health checker
+		backendURL := fmt.Sprintf("http://localhost:%d", req.Port)
+		if req.Route != "" {
+			if err := api.proxy.AddBackend(req.Route, backendURL); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		api.hc.AddBackend(backendURL)
 
 		w.WriteHeader(http.StatusCreated)
 		return
@@ -196,6 +211,19 @@ func (api *API) handleLogs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"logs": logs,
+	})
+}
+
+// handleRoutes handles GET /routes to list available proxy route paths
+func (api *API) handleRoutes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"routes": api.proxy.RouteNames(),
 	})
 }
 

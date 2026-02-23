@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"math/rand"
+	"sync"
 	"sync/atomic"
 
 	"github.com/tanmay/gateway/internal/health"
@@ -11,6 +12,7 @@ import (
 // Supports round-robin and random strategies, and skips unhealthy backends.
 type LoadBalancer struct {
 	backends      []string
+	mu            sync.RWMutex // protects backends slice
 	strategy      string
 	counter       uint64 // atomic counter for round-robin
 	healthChecker *health.HealthChecker
@@ -27,6 +29,13 @@ func NewLoadBalancer(backends []string, strategy string, hc *health.HealthChecke
 		strategy:      strategy,
 		healthChecker: hc,
 	}
+}
+
+// AddBackend registers a new backend URL with this load balancer at runtime.
+func (lb *LoadBalancer) AddBackend(url string) {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+	lb.backends = append(lb.backends, url)
 }
 
 // Next returns the next backend URL based on the load balancing strategy.
@@ -50,12 +59,17 @@ func (lb *LoadBalancer) Next() string {
 // healthyBackends returns only backends that are currently healthy.
 // If no health checker is configured, returns all backends.
 func (lb *LoadBalancer) healthyBackends() []string {
+	lb.mu.RLock()
+	backends := make([]string, len(lb.backends))
+	copy(backends, lb.backends)
+	lb.mu.RUnlock()
+
 	if lb.healthChecker == nil {
-		return lb.backends
+		return backends
 	}
 
 	var healthy []string
-	for _, backend := range lb.backends {
+	for _, backend := range backends {
 		if lb.healthChecker.IsHealthy(backend) {
 			healthy = append(healthy, backend)
 		}
@@ -64,7 +78,7 @@ func (lb *LoadBalancer) healthyBackends() []string {
 	// If all backends are unhealthy, return all of them as fallback
 	// (let the circuit breaker handle failures instead of blocking everything)
 	if len(healthy) == 0 {
-		return lb.backends
+		return backends
 	}
 	return healthy
 }

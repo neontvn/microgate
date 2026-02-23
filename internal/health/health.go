@@ -87,6 +87,19 @@ func (hc *HealthChecker) StartBackground(interval time.Duration) {
 	}()
 }
 
+// AddBackend registers a new backend URL for health monitoring at runtime.
+// It will be picked up on the next health check tick.
+func (hc *HealthChecker) AddBackend(url string) {
+	hc.mu.Lock()
+	defer hc.mu.Unlock()
+	if _, exists := hc.backends[url]; !exists {
+		hc.backends[url] = &BackendStatus{
+			URL:     url,
+			Healthy: false, // unknown until first check
+		}
+	}
+}
+
 // IsHealthy returns whether a specific backend is currently healthy.
 // Uses RLock (read lock) so multiple goroutines can check simultaneously
 // without blocking each other — only writes need an exclusive lock.
