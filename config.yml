@@ -33,6 +33,23 @@ dashboard:
   log_capacity: 1000
   sse_buffer: 256
 
+analytics:
+  enabled: true
+  bucket_interval: "1m"
+  retention: "48h"
+  analyzer_interval: "5m"
+
+adaptive_rate_limit:
+  enabled: true
+  multiplier: 3.0
+  min_limit: 10
+  max_limit: 10000
+  learning_period: "1h"
+
+weighted_lb:
+  enabled: true
+  rebalance_interval: "5m"
+
 processes:
   - id: "backend-9001"
     command: "./tmp/testbackend"

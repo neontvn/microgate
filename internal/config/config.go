@@ -73,16 +73,42 @@ type ProcessConfig struct {
 	AutoStart bool     `yaml:"auto_start"`
 }
 
+// AnalyticsConfig holds traffic analytics settings.
+type AnalyticsConfig struct {
+	Enabled          bool   `yaml:"enabled"`
+	BucketInterval   string `yaml:"bucket_interval"`   // e.g., "1m"
+	Retention        string `yaml:"retention"`          // e.g., "48h"
+	AnalyzerInterval string `yaml:"analyzer_interval"`  // e.g., "5m"
+}
+
+// AdaptiveRateLimitConfig holds adaptive rate limiter settings.
+type AdaptiveRateLimitConfig struct {
+	Enabled        bool    `yaml:"enabled"`
+	Multiplier     float64 `yaml:"multiplier"`      // allow up to N× normal traffic
+	MinLimit       float64 `yaml:"min_limit"`        // never go below this
+	MaxLimit       float64 `yaml:"max_limit"`        // never go above this
+	LearningPeriod string  `yaml:"learning_period"`  // e.g., "1h"
+}
+
+// WeightedLBConfig holds weighted load balancer settings.
+type WeightedLBConfig struct {
+	Enabled            bool   `yaml:"enabled"`
+	RebalanceInterval  string `yaml:"rebalance_interval"` // e.g., "5m"
+}
+
 // Config is the top-level configuration for the gateway.
 type Config struct {
-	Server         ServerConfig         `yaml:"server"`
-	Routes         []Route              `yaml:"routes"`
-	RateLimit      RateLimitConfig      `yaml:"ratelimit"`
-	Auth           AuthConfig           `yaml:"auth"`
-	CircuitBreaker CircuitBreakerConfig `yaml:"circuitbreaker"`
-	HealthCheck    HealthCheckConfig    `yaml:"healthcheck"`
-	Dashboard      DashboardConfig      `yaml:"dashboard,omitempty"`
-	Processes      []ProcessConfig      `yaml:"processes,omitempty"`
+	Server            ServerConfig            `yaml:"server"`
+	Routes            []Route                 `yaml:"routes"`
+	RateLimit         RateLimitConfig         `yaml:"ratelimit"`
+	Auth              AuthConfig              `yaml:"auth"`
+	CircuitBreaker    CircuitBreakerConfig    `yaml:"circuitbreaker"`
+	HealthCheck       HealthCheckConfig       `yaml:"healthcheck"`
+	Dashboard         DashboardConfig         `yaml:"dashboard,omitempty"`
+	Processes         []ProcessConfig         `yaml:"processes,omitempty"`
+	Analytics         AnalyticsConfig         `yaml:"analytics,omitempty"`
+	AdaptiveRateLimit AdaptiveRateLimitConfig `yaml:"adaptive_rate_limit,omitempty"`
+	WeightedLB        WeightedLBConfig        `yaml:"weighted_lb,omitempty"`
 }
 
 // LoadConfig reads a YAML config file and parses it into a Config struct.

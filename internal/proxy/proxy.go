@@ -14,18 +14,19 @@ import (
 )
 
 // Proxy routes requests to backends based on configured path prefixes.
-// Each route gets a load balancer. Backends can be added at runtime.
+// Each route gets a backend selector (LoadBalancer or WeightedLoadBalancer).
+// Backends can be added at runtime.
 type Proxy struct {
 	mux    *http.ServeMux
-	routes map[string]*LoadBalancer // path → load balancer
-	mu     sync.RWMutex            // protects routes map
+	routes map[string]BackendSelector // path → backend selector
+	mu     sync.RWMutex              // protects routes map
 }
 
 // NewProxy creates a Proxy that routes requests to backends
 // based on the configured path prefixes.
 func NewProxy(cfg *config.Config, hc *health.HealthChecker) *Proxy {
 	mux := http.NewServeMux()
-	routes := make(map[string]*LoadBalancer)
+	routes := make(map[string]BackendSelector)
 
 	p := &Proxy{
 		mux:    mux,
@@ -76,19 +77,27 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.mux.ServeHTTP(w, r)
 }
 
-// AddBackend registers a new backend URL with the load balancer for the given route.
+// AddBackend registers a new backend URL with the backend selector for the given route.
 func (p *Proxy) AddBackend(routePath, backendURL string) error {
 	p.mu.RLock()
-	lb, ok := p.routes[routePath]
+	selector, ok := p.routes[routePath]
 	p.mu.RUnlock()
 
 	if !ok {
 		return fmt.Errorf("route %q not found", routePath)
 	}
 
-	lb.AddBackend(backendURL)
+	selector.AddBackend(backendURL)
 	log.Printf("[proxy] Backend added dynamically: %s → %s", routePath, backendURL)
 	return nil
+}
+
+// SetRouteSelector replaces the backend selector for a specific route.
+// Used during startup to swap in a WeightedLoadBalancer when enabled.
+func (p *Proxy) SetRouteSelector(routePath string, selector BackendSelector) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.routes[routePath] = selector
 }
 
 // RouteNames returns a sorted list of all configured route paths.

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/tanmay/gateway/internal/analytics"
 	"github.com/tanmay/gateway/internal/config"
 	"github.com/tanmay/gateway/internal/dashboard"
 	"github.com/tanmay/gateway/internal/health"
@@ -53,17 +54,124 @@ func main() {
 		broker.Broadcast("process", p)
 	}
 
-	// Chain middleware: RequestID → Metrics → Capture → Logging → RateLimit → Auth → CircuitBreaker → Proxy
-	handler := middleware.Chain(
-		proxyHandler,
+	// --- Phase 5: Adaptive Traffic Intelligence ---
+
+	// Collect route prefixes for traffic normalization
+	var routePrefixes []string
+	for _, route := range cfg.Routes {
+		routePrefixes = append(routePrefixes, route.Path)
+	}
+
+	// Initialize TrafficStore and TrafficRecorder
+	var trafficStore analytics.TrafficStore
+	var trafficRecorder *middleware.TrafficRecorder
+	var analyzer *analytics.Analyzer
+	var analyticsAPI *analytics.AnalyticsAPI
+
+	if cfg.Analytics.Enabled {
+		retention, _ := time.ParseDuration(cfg.Analytics.Retention)
+		if retention <= 0 {
+			retention = 48 * time.Hour
+		}
+		trafficStore = analytics.NewMemoryTrafficStore(retention)
+		trafficStore.(*analytics.MemoryTrafficStore).StartCleanup()
+
+		trafficRecorder = middleware.NewTrafficRecorder(trafficStore, routePrefixes)
+
+		// Initialize the Analyzer
+		analyzerInterval, _ := time.ParseDuration(cfg.Analytics.AnalyzerInterval)
+		analyzer = analytics.NewAnalyzer(trafficStore, analytics.AnalyzerConfig{
+			Interval:        analyzerInterval,
+			Window:          1 * time.Hour,
+			ZScoreThreshold: 3.0,
+		})
+		analyzer.Start()
+		log.Println("[init] Traffic analyzer started")
+
+		// Wire analyzer into circuit breaker for dynamic thresholds
+		circuitBreaker.SetAnalyzer(analyzer)
+
+		// Initialize analytics REST API
+		analyticsAPI = analytics.NewAnalyticsAPI(analyzer, trafficStore)
+	}
+
+	// Build the rate limiting middleware (static or adaptive)
+	var rateLimitMiddleware middleware.Middleware
+	if cfg.AdaptiveRateLimit.Enabled && analyzer != nil {
+		learningPeriod, _ := time.ParseDuration(cfg.AdaptiveRateLimit.LearningPeriod)
+		adaptiveRL := middleware.NewAdaptiveRateLimiter(rateLimiter, analyzer, middleware.AdaptiveRateLimitConfig{
+			Enabled:        true,
+			Multiplier:     cfg.AdaptiveRateLimit.Multiplier,
+			MinLimit:       cfg.AdaptiveRateLimit.MinLimit,
+			MaxLimit:       cfg.AdaptiveRateLimit.MaxLimit,
+			LearningPeriod: learningPeriod,
+		})
+
+		// Route resolver: maps a full path to its normalized route prefix
+		routeResolver := func(path string) string {
+			if trafficRecorder != nil {
+				return trafficRecorder.NormalizeRoute(path)
+			}
+			return path
+		}
+
+		rateLimitMiddleware = adaptiveRL.Middleware(routeResolver)
+		log.Println("[init] Adaptive rate limiter enabled")
+	} else {
+		rateLimitMiddleware = rateLimiter.Middleware()
+	}
+
+	// Set up weighted load balancers if enabled
+	var weightedLBs []*proxy.WeightedLoadBalancer
+	if cfg.WeightedLB.Enabled && analyzer != nil {
+		rebalanceInterval, _ := time.ParseDuration(cfg.WeightedLB.RebalanceInterval)
+		for _, route := range cfg.Routes {
+			backends := route.GetBackends()
+			if len(backends) <= 1 {
+				continue // no point in weighted LB for single backend
+			}
+
+			wlb := proxy.NewWeightedLoadBalancer(backends, analyzer, healthChecker, rebalanceInterval)
+			wlb.StartRebalancing()
+			proxyHandler.SetRouteSelector(route.Path, wlb)
+			weightedLBs = append(weightedLBs, wlb)
+			log.Printf("[init] Weighted LB enabled for %s", route.Path)
+		}
+
+		// Provide weight data to analytics API
+		if analyticsAPI != nil && len(weightedLBs) > 0 {
+			analyticsAPI.SetWeightProvider(func() map[string]float64 {
+				allWeights := make(map[string]float64)
+				for _, wlb := range weightedLBs {
+					for backend, weight := range wlb.GetWeights() {
+						allWeights[backend] = weight
+					}
+				}
+				return allWeights
+			})
+		}
+	}
+
+	// Build middleware chain
+	middlewares := []middleware.Middleware{
 		middleware.RequestID(),
 		middleware.Capture(logStore),
 		middleware.Metrics(),
+	}
+
+	// Add traffic recording middleware if analytics is enabled
+	if trafficRecorder != nil {
+		middlewares = append(middlewares, trafficRecorder.Middleware())
+	}
+
+	middlewares = append(middlewares,
 		middleware.Logging(),
-		rateLimiter.Middleware(),
+		rateLimitMiddleware,
 		auth.Middleware(),
 		circuitBreaker.Middleware(),
 	)
+
+	handler := middleware.Chain(proxyHandler, middlewares...)
 
 	// Populate managed processes from config
 	for _, procCfg := range cfg.Processes {
@@ -95,6 +203,12 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/health", healthChecker.Handler()) // outside middleware chain — no auth/rate limit
 	mux.Handle("/metrics", promhttp.Handler())     // Prometheus metrics endpoint
+
+	// Analytics API (outside middleware chain)
+	if analyticsAPI != nil {
+		log.Println("[init] Analytics API enabled at /analytics/")
+		mux.Handle("/analytics/", http.StripPrefix("/analytics", analyticsAPI.Handler()))
+	}
 
 	// Dashboard
 	if cfg.Dashboard.Enabled {
