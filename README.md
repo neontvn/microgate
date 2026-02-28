@@ -15,7 +15,7 @@ A production-grade API gateway built in Go. MicroGate sits between clients and y
 - **Prometheus Metrics** — standard HTTP metrics exposed at `/metrics`
 - **Graceful Shutdown** — drains in-flight requests and stops managed processes on `SIGTERM`
 
-### Adaptive Intelligence (Phase 5)
+### Adaptive Intelligence
 - **Traffic Recording** — every request is asynchronously sampled into 1-minute time buckets
 - **Background Analyzer** — runs every 5 minutes to compute moving averages, standard deviations, and z-score anomaly detection per route and per backend
 - **Adaptive Rate Limiter** — dynamically sets per-route limits at `mean_rate × multiplier` instead of a hardcoded number; falls back to static config during the learning period
